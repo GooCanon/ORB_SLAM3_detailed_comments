@@ -7706,7 +7706,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     e->setInformation(Eigen::Matrix2d::Identity()*invSigma2);
 
                     g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-                    // 设置鲁棒核函数，避免其误差的平方项出现数值过大的增长
+                    // 设置鲁棒核函数，避免其误差的平方项出现数值过大的增长 注：后面某一阶段的代码会重新设置该项
                     e->setRobustKernel(rk);
 
                     //重投影误差的自由度为2，设置对应的卡方阈值
@@ -7827,7 +7827,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     optimizer.addEdge(ei);
 
     //第三种边，陀螺仪随机游走约束：陀螺仪的随机游走值在相近帧间不会相差太多  residual=VG-VGk
-    //大白话就是用固定的VGK拽住VG，防止VG在优化中放飞自我
+    //用大白话来讲就是用固定的VGK拽住VG，防止VG在优化中放飞自我
     EdgeGyroRW* egr = new EdgeGyroRW();
     egr->setVertex(0,VGk);
     egr->setVertex(1,VG);
@@ -7844,7 +7844,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     optimizer.addEdge(egr);
 
     //第四种边，加速度随机游走约束：加速度的随机游走值在相近帧间不会相差太多  residual=VA-VAk
-    //大白话就是用固定的VAK拽住VA，防止VA在优化中放飞自我
+    //用大白话来讲就是用固定的VAK拽住VA，防止VA在优化中放飞自我
     EdgeAccRW* ear = new EdgeAccRW();
     ear->setVertex(0,VAk);
     ear->setVertex(1,VA);
@@ -7861,11 +7861,11 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
-    //每次优化后，用更小的卡方检验值，原因是随着优化的进行，对划分为内点的信任程度越来越低
-    //（既然优化带来了精度的提升，检验就会越来越苛刻）
+    //卡方检验值呈递减趋势，目的是让检验越来越苛刻
     float chi2Mono[4]={12,7.5,5.991,5.991};
     float chi2Stereo[4]={15.6,9.8,7.815,7.815};
 
+    //4次优化的迭代次数都为10
     int its[4]={10,10,10,10};
 
     int nBad=0;
@@ -7875,9 +7875,12 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     int nInliersStereo = 0;
     int nInliers=0;
     bool bOut = false;
+
+    //进行4次优化
     for(size_t it=0; it<4; it++)
     {
         optimizer.initializeOptimization(0);
+        //每次优化迭代十次
         optimizer.optimize(its[it]);
 
         nBad=0;
@@ -7886,6 +7889,9 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
         nInliers=0;
         nInliersMono=0;
         nInliersStereo=0;
+
+        //使用1.5倍的chi2Mono作为“近点”的卡方检验值，意味着地图点越近，检验越宽松
+        //地图点如何定义为“近点”在下面的代码中有解释
         float chi2close = 1.5*chi2Mono[it];
 
         // For monocular observations
@@ -7901,8 +7907,16 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             }
 
             const float chi2 = e->chi2();
+
+            //当地图点在当前帧的深度值小于10时，该地图点属于close（近点）
+            //mTrackDepth是在Frame.cc的isInFrustum函数中计算出来的
             bool bClose = pFrame->mvpMapPoints[idx]->mTrackDepth<10.f;
 
+            //判断某地图点为外点的条件有以下三种：
+            //1.该地图点不是近点并且卡方检验值大于chi2Mono[it]
+            //2.该地图点是近点并且卡方检验值大于chi2close
+            //3.深度不为正
+            //每次优化后，用更小的卡方检验值，原因是随着优化的进行，对划分为内点的信任程度越来越低
             if((chi2>chi2Mono[it]&&!bClose)||(bClose && chi2>chi2close)||!e->isDepthPositive())
             {
                 pFrame->mvbOutlier[idx]=true;
@@ -7916,6 +7930,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                 nInliersMono++;
             }
 
+            //从第三次优化开始就不设置鲁棒核函数了，原因是经过两轮优化已经趋向准确值，不会有太大误差
             if (it==2)
                 e->setRobustKernel(0);
         }
