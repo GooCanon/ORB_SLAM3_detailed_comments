@@ -7712,10 +7712,12 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     //重投影误差的自由度为2，设置对应的卡方阈值
                     rk->setDelta(thHuberMono);
 
-                    //把第一种边加入优化器
+                    //将第一种边加入优化器
                     optimizer.addEdge(e);
 
+                    //将第一种边加入vpEdgesMono
                     vpEdgesMono.push_back(e);
+                    //将对应的特征点索引加入vnIndexEdgeMono
                     vnIndexEdgeMono.push_back(i);
                 }
                 // Stereo observation
@@ -7810,9 +7812,9 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     VAk->setFixed(true);
     optimizer.addVertex(VAk);
     //setFixed(true)这个设置使以上四个顶点（15个参数）在优化时保持固定
-    //既然被选为关键帧，保持节操乃立命之本，不能太善变了
+    //既然被选为关键帧，不能太善变了，保持节操乃立命之本
 
-    //第二种边，
+    //第二种边，IMU对两帧之间位姿的约束
     EdgeInertial* ei = new EdgeInertial(pFrame->mpImuPreintegrated);
 
     //将上一关键帧对应的四个顶点加入ei边
@@ -7820,7 +7822,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     ei->setVertex(1, VVk);
     ei->setVertex(2, VGk);
     ei->setVertex(3, VAk);
-    //混入了两个奇怪的顶点
     ei->setVertex(4, VP);
     ei->setVertex(5, VV);
     //把第二种边加入优化器
@@ -7868,21 +7869,29 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //4次优化的迭代次数都为10
     int its[4]={10,10,10,10};
 
+    //坏点数
     int nBad=0;
+    //单目坏点数
     int nBadMono = 0;
+    //双目坏点数
     int nBadStereo = 0;
+    //单目内点数
     int nInliersMono = 0;
+    //双目内点数
     int nInliersStereo = 0;
+    //内点数
     int nInliers=0;
     bool bOut = false;
 
     //进行4次优化
     for(size_t it=0; it<4; it++)
     {
+        // 初始化优化器,这里的参数0代表只对level为0的边进行优化（不传参数默认也是0）
         optimizer.initializeOptimization(0);
         //每次优化迭代十次
         optimizer.optimize(its[it]);
 
+        //每次优化都重新统计各类点的数目
         nBad=0;
         nBadMono = 0;
         nBadStereo = 0;
@@ -7901,11 +7910,14 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
             const size_t idx = vnIndexEdgeMono[i];
 
+            // 如果这条误差边是来自于outlier
             if(pFrame->mvbOutlier[idx])
             {
+                //计算本次优化后的误差
                 e->computeError();
             }
 
+            // 就是error*\Omega*error，表示了这条边考虑置信度以后的误差大小
             const float chi2 = e->chi2();
 
             //当地图点在当前帧的深度值小于10时，该地图点属于close（近点）
@@ -7913,20 +7925,26 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             bool bClose = pFrame->mvpMapPoints[idx]->mTrackDepth<10.f;
 
             //判断某地图点为外点的条件有以下三种：
-            //1.该地图点不是近点并且卡方检验值大于chi2Mono[it]
-            //2.该地图点是近点并且卡方检验值大于chi2close
+            //1.该地图点不是近点并且误差大于卡方检验值chi2Mono[it]
+            //2.该地图点是近点并且误差大于卡方检验值chi2close
             //3.深度不为正
             //每次优化后，用更小的卡方检验值，原因是随着优化的进行，对划分为内点的信任程度越来越低
             if((chi2>chi2Mono[it]&&!bClose)||(bClose && chi2>chi2close)||!e->isDepthPositive())
             {
+                //将该点设置为外点
                 pFrame->mvbOutlier[idx]=true;
+                //外点不参与下一轮优化
                 e->setLevel(1);
+                //单目坏点数+1
                 nBadMono++;
             }
             else
             {
+                //将该点设置为内点（暂时）
                 pFrame->mvbOutlier[idx]=false;
+                //内点继续参与下一轮优化
                 e->setLevel(0);
+                //单目内点数+1
                 nInliersMono++;
             }
 
@@ -7966,9 +7984,12 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                 e->setRobustKernel(0);
         }
 
+        //内点总数=单目内点数+双目内点数
         nInliers = nInliersMono + nInliersStereo;
+        //坏点数=单目坏点数+双目坏点数
         nBad = nBadMono + nBadStereo;
 
+        //
         if(optimizer.edges().size()<10)
         {
             cout << "PIOLKF: NOT ENOUGH EDGES" << endl;
@@ -7978,18 +7999,25 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     }
 
     // If not too much tracks, recover not too bad points
+    //若4次优化后内点数小于30，尝试恢复一部分不那么糟糕的坏点
     if ((nInliers<30) && !bRecInit)
     {
+        //重新从0开始统计坏点数
         nBad=0;
+        //单目可容忍的卡方检验最大值（如果误差比这还大就不要挣扎了...）
         const float chi2MonoOut = 18.f;
         const float chi2StereoOut = 24.f;
         EdgeMonoOnlyPose* e1;
         EdgeStereoOnlyPose* e2;
+        //遍历所有单目特征点
         for(size_t i=0, iend=vnIndexEdgeMono.size(); i<iend; i++)
         {
             const size_t idx = vnIndexEdgeMono[i];
+            //获取这些特征点对应的边
             e1 = vpEdgesMono[i];
+            // ?计算误差，其实优化过程中已经计算过了，是不是可以省略这步？
             e1->computeError();
+            //判断误差值是否超过单目可容忍的卡方检验最大值，是的话就把这个点保下来
             if (e1->chi2()<chi2MonoOut)
                 pFrame->mvbOutlier[idx]=false;
             else
@@ -8008,9 +8036,11 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     }
 
     // Recover optimized pose, velocity and biases
+    //给当前帧设置优化后的旋转值，位移值，速度值，用来更新位姿
     pFrame->SetImuPoseVelocity(Converter::toCvMat(VP->estimate().Rwb),Converter::toCvMat(VP->estimate().twb),Converter::toCvMat(VV->estimate()));
     Vector6d b;
     b << VG->estimate(), VA->estimate();
+    //给当前帧设置优化后的bg，ba
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
     // Recover Hessian, marginalize keyFframe states and generate new prior for frame
@@ -8052,6 +8082,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             tot_out++;
     }
 
+    //下一帧边缘化时
     pFrame->mpcpi = new ConstraintPoseImu(VP->estimate().Rwb,VP->estimate().twb,VV->estimate(),VG->estimate(),VA->estimate(),H);
 
     return nInitialCorrespondences-nBad;
