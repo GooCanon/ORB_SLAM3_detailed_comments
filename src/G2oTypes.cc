@@ -719,6 +719,9 @@ EdgeInertial::EdgeInertial(IMU::Preintegrated *pInt):JRg(Converter::toMatrix3d(p
 
 void EdgeInertial::computeError()
 {
+    //参考作者的论文ORB-SLAM3: An Accurate Open-Source Library for Visual, 
+    //Visual-Inertial and Multi-Map SLAM，Formula(2)
+
     // TODO Maybe Reintegrate inertial measurments when difference between linearization point and current estimate is too big
     const VertexPose* VP1 = static_cast<const VertexPose*>(_vertices[0]);
     const VertexVelocity* VV1= static_cast<const VertexVelocity*>(_vertices[1]);

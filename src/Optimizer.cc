@@ -8044,11 +8044,37 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
     // Recover Hessian, marginalize keyFframe states and generate new prior for frame
+
+    //GetHessian2
+    //                   9                             + 3               + 3       =15
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     ||
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      9
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      +
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
+    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     3
+    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     +
+    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     
+    // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
+    // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear  3
+    // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
     Eigen::Matrix<double,15,15> H;
     H.setZero();
+    //H(x)=J(x).t()*info*J(x)
 
+    //H(∂er/∂r) H(∂er/∂t) H(∂er/∂v)
+    //H(∂ev/∂r) H(∂ev/∂t) H(∂ev/∂v)
+    //H(∂ep/∂r) H(∂ep/∂t) H(∂ep/∂v)
     H.block<9,9>(0,0)+= ei->GetHessian2();
+
+    //H(∂ebg/∂bg) 
     H.block<3,3>(9,9) += egr->GetHessian2();
+
+    //H(∂eba/∂ba) 
     H.block<3,3>(12,12) += ear->GetHessian2();
 
     int tot_in = 0, tot_out = 0;
