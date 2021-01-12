@@ -8044,8 +8044,31 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
     // Recover Hessian, marginalize keyFframe states and generate new prior for frame
+    Eigen::Matrix<double,15,15> H;
+    H.setZero();
 
-    //GetHessian2
+    //H(x)=J(x).t()*info*J(x)
+
+    //J(x)取的是EdgeInertial中的_jacobianOplus[4]和_jacobianOplus[5]，即EdgeInertial::computeError计算出来的er,ev,ep对当前帧Pose和Velocity的偏导
+    //因此ei->GetHessian2的结果为：
+    //H(∂er/∂r) H(∂er/∂t) H(∂er/∂v)
+    //H(∂ev/∂r) H(∂ev/∂t) H(∂ev/∂v)
+    //H(∂ep/∂r) H(∂ep/∂t) H(∂ep/∂v)
+    //每项H都是3x3，故GetHessian2的结果是9x9
+    H.block<9,9>(0,0)+= ei->GetHessian2();
+
+    //J(x)取的是EdgeGyroRW中的_jacobianOplusXj，即EdgeGyroRW::computeError计算出来的_error(ebg)对当前帧bg的偏导
+    //因此egr->GetHessian2的结果为：
+    //H(∂ebg/∂bg) ，3x3
+    H.block<3,3>(9,9) += egr->GetHessian2();
+
+    //J(x)取的是EdgeAccRW中的_jacobianOplusXj，即EdgeAccRW::computeError计算出来的_error(ebg)对当前帧ba的偏导
+    //因此ear->GetHessian2的结果为：
+    //H(∂eba/∂ba)  ，3x3
+    H.block<3,3>(12,12) += ear->GetHessian2();
+
+    
+    //经过前面几步，Hessian Matrix长这个样子（注：省略了->GetHessian2()）
     //                   9                             + 3               + 3       =15
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     ||
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     
@@ -8062,20 +8085,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
     // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear  3
     // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
-    Eigen::Matrix<double,15,15> H;
-    H.setZero();
-    //H(x)=J(x).t()*info*J(x)
-
-    //H(∂er/∂r) H(∂er/∂t) H(∂er/∂v)
-    //H(∂ev/∂r) H(∂ev/∂t) H(∂ev/∂v)
-    //H(∂ep/∂r) H(∂ep/∂t) H(∂ep/∂v)
-    H.block<9,9>(0,0)+= ei->GetHessian2();
-
-    //H(∂ebg/∂bg) 
-    H.block<3,3>(9,9) += egr->GetHessian2();
-
-    //H(∂eba/∂ba) 
-    H.block<3,3>(12,12) += ear->GetHessian2();
 
     int tot_in = 0, tot_out = 0;
     for(size_t i=0, iend=vpEdgesMono.size(); i<iend; i++)
@@ -8085,7 +8094,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
         const size_t idx = vnIndexEdgeMono[i];
 
         if(!pFrame->mvbOutlier[idx])
-        {
+        {   
             H.block<6,6>(0,0) += e->GetHessian();
             tot_in++;
         }
@@ -8108,7 +8117,26 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             tot_out++;
     }
 
-    //下一帧边缘化时
+    //设eie = ei->GetHessian2()+∑(e->GetHessian())
+    //则最终Hessian Matrix长这样
+    //                              9                                 + 3               + 3       =15
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0     ||
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0     
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      9
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      +
+    // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
+    // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
+    // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
+    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     3
+    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     +
+    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     
+    //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
+    //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear  3
+    //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
+
+    //下一帧边缘化
     pFrame->mpcpi = new ConstraintPoseImu(VP->estimate().Rwb,VP->estimate().twb,VV->estimate(),VG->estimate(),VA->estimate(),H);
 
     return nInitialCorrespondences-nBad;

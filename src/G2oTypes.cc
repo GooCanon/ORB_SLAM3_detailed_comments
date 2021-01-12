@@ -736,9 +736,9 @@ void EdgeInertial::computeError()
 
     //er = logSO3(dR.t*r1.t*r2.t)
     const Eigen::Vector3d er = LogSO3(dR.transpose()*VP1->estimate().Rwb.transpose()*VP2->estimate().Rwb);
-    //ev = r1.t*(v2-v1-gt)-dV
+    //ev = r1.t()*(v2-v1-gt)-dV
     const Eigen::Vector3d ev = VP1->estimate().Rwb.transpose()*(VV2->estimate() - VV1->estimate() - g*dt) - dV;
-    //ep = r1.t*(t2-t1-v1*t-gt*t/2)-dP
+    //ep = r1.t()*(t2-t1-v1*t-gt*t/2)-dP
     const Eigen::Vector3d ep = VP1->estimate().Rwb.transpose()*(VP2->estimate().twb - VP1->estimate().twb
                                                                - VV1->estimate()*dt - g*dt*dt/2) - dP;
 
