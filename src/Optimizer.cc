@@ -7669,11 +7669,17 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                 cv::KeyPoint kpUn;
 
                 // Left monocular observation
+                // 这里说的Left monocular包含两种情况：1.单目情况 2.双目情况下的左目
                 if((!bRight && pFrame->mvuRight[i]<0) || i < Nleft)
                 {
+                    //如果是双目情况下的左目
                     if(i < Nleft) // pair left-right
+                        //使用未畸变校正的特征点
+                        // ?为什么
                         kpUn = pFrame->mvKeys[i];
+                    //如果是单目
                     else
+                        //使用畸变校正过的特征点
                         kpUn = pFrame->mvKeysUn[i];
 
                     //单目地图点计数增加
@@ -7684,20 +7690,19 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
-                    //第一种边，单目位姿约束：地图点投影到该帧图像的重投影误差尽可能小
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的重投影误差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
-                    //设置第一个顶点为位姿
+                    //将位姿作为第一个顶点
                     e->setVertex(0,VP);
 
                     //设置观测值，即去畸变后的像素坐标
                     e->setMeasurement(obs);
 
                     // Add here uncerteinty
-                    // ?获取不确定度，这里调用uncertainty2返回固定值1.0（这里的1.0是作为基准值的意思吗？）
+                    // 获取不确定度，这里调用uncertainty2返回固定值1.0
+                    // ?这里的1.0是作为缺省值的意思吗？是否可以根据对视觉信息的信任度动态修改这个值，比如标定的误差？
                     const float unc2 = pFrame->mpCamera->uncertainty2(obs);
-
-
 
                     //invSigma2 = (Inverse(协方差矩阵))^2，表明该约束在各个维度上的可信度
                     // 图像金字塔层数越高，可信度越差
@@ -7706,7 +7711,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     e->setInformation(Eigen::Matrix2d::Identity()*invSigma2);
 
                     g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-                    // 设置鲁棒核函数，避免其误差的平方项出现数值过大的增长 注：后面某一阶段的代码会重新设置该项
+                    // 设置鲁棒核函数，避免其误差的平方项出现数值过大的增长 注：后续在优化2次后会用e->setRobustKernel(0)禁掉鲁棒核函数
                     e->setRobustKernel(rk);
 
                     //重投影误差的自由度为2，设置对应的卡方阈值
@@ -7811,13 +7816,13 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     VAk->setId(7);
     VAk->setFixed(true);
     optimizer.addVertex(VAk);
-    //setFixed(true)这个设置使以上四个顶点（15个参数）在优化时保持固定
-    //既然被选为关键帧，不能太善变了，保持节操乃立命之本
+    //setFixed(true)这个设置使以上四个顶点（15个参数）的值在优化时保持固定
+    //既然被选为关键帧，就不能太善变
 
-    //第二种边，IMU对两帧之间位姿的约束
+    //第二种边（IMU预积分约束）：两帧之间位姿的变化量与IMU预积分的值偏差尽可能小
     EdgeInertial* ei = new EdgeInertial(pFrame->mpImuPreintegrated);
 
-    //将上一关键帧对应的四个顶点加入ei边
+    //将上一关键帧四个顶点（P、V、BG、BA）和当前帧两个顶点（P、V）加入第二种边
     ei->setVertex(0, VPk);
     ei->setVertex(1, VVk);
     ei->setVertex(2, VGk);
@@ -7827,10 +7832,13 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //把第二种边加入优化器
     optimizer.addEdge(ei);
 
-    //第三种边，陀螺仪随机游走约束：陀螺仪的随机游走值在相近帧间不会相差太多  residual=VG-VGk
+    //第三种边（陀螺仪随机游走约束）：陀螺仪的随机游走值在相近帧间不会相差太多  residual=VG-VGk
     //用大白话来讲就是用固定的VGK拽住VG，防止VG在优化中放飞自我
     EdgeGyroRW* egr = new EdgeGyroRW();
+
+    //将上一关键帧的BG加入第三种边
     egr->setVertex(0,VGk);
+    //将当前帧的BG加入第三种边
     egr->setVertex(1,VG);
     //C值在预积分阶段更新，range(9,12)对应陀螺仪偏置的协方差，最终cvInfoG值为inv(∑(GyroRW^2/freq))
     cv::Mat cvInfoG = pFrame->mpImuPreintegrated->C.rowRange(9,12).colRange(9,12).inv(cv::DECOMP_SVD);
@@ -7844,10 +7852,12 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //把第三种边加入优化器
     optimizer.addEdge(egr);
 
-    //第四种边，加速度随机游走约束：加速度的随机游走值在相近帧间不会相差太多  residual=VA-VAk
+    //第四种边（加速度随机游走约束）：加速度的随机游走值在相近帧间不会相差太多  residual=VA-VAk
     //用大白话来讲就是用固定的VAK拽住VA，防止VA在优化中放飞自我
     EdgeAccRW* ear = new EdgeAccRW();
+    //将上一关键帧的BA加入第四种边
     ear->setVertex(0,VAk);
+    //将当前帧的BA加入第四种边
     ear->setVertex(1,VA);
     //C值在预积分阶段更新，range(12,15)对应加速度偏置的协方差，最终cvInfoG值为inv(∑(AccRW^2/freq))
     cv::Mat cvInfoA = pFrame->mpImuPreintegrated->C.rowRange(12,15).colRange(12,15).inv(cv::DECOMP_SVD);
@@ -7865,7 +7875,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //卡方检验值呈递减趋势，目的是让检验越来越苛刻
     float chi2Mono[4]={12,7.5,5.991,5.991};
     float chi2Stereo[4]={15.6,9.8,7.815,7.815};
-
     //4次优化的迭代次数都为10
     int its[4]={10,10,10,10};
 
@@ -7913,7 +7922,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             // 如果这条误差边是来自于outlier
             if(pFrame->mvbOutlier[idx])
             {
-                //计算本次优化后的误差
+                //计算这条边上次优化后的误差
                 e->computeError();
             }
 
@@ -8144,17 +8153,22 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
 int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 {
+    //构建一个稀疏求解器
     g2o::SparseOptimizer optimizer;
+    // ?线性方程求解器，BlockSolverX表示？
     g2o::BlockSolverX::LinearSolverType * linearSolver;
 
+    // 使用dense的求解器，（常见非dense求解器有cholmod线性求解器和shur补线性求解器）
     linearSolver = new g2o::LinearSolverDense<g2o::BlockSolverX::PoseMatrixType>();
 
     g2o::BlockSolverX * solver_ptr = new g2o::BlockSolverX(linearSolver);
 
+    //使用高斯牛顿求解器
     g2o::OptimizationAlgorithmGaussNewton* solver = new g2o::OptimizationAlgorithmGaussNewton(solver_ptr);
     optimizer.setAlgorithm(solver);
     optimizer.setVerbose(false);
 
+    //当前帧单（左）目地图点数目
     int nInitialMonoCorrespondences=0;
     int nInitialStereoCorrespondences=0;
     int nInitialCorrespondences=0;
@@ -8178,8 +8192,11 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     optimizer.addVertex(VA);
 
     // Set MapPoint vertices
+    //当前帧的特征点总数
     const int N = pFrame->N;
+    //当前帧左目的特征点总数
     const int Nleft = pFrame->Nleft;
+    //当前帧是否存在右目（即是否为双目）
     const bool bRight = (Nleft!=-1);
 
     vector<EdgeMonoOnlyPose*> vpEdgesMono;
@@ -8191,10 +8208,13 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     vnIndexEdgeMono.reserve(N);
     vnIndexEdgeStereo.reserve(N);
 
+    // 自由度为2的卡方分布，显著性水平为0.05，对应的临界阈值5.991
     const float thHuberMono = sqrt(5.991);
+    // 自由度为3的卡方分布，显著性水平为0.05，对应的临界阈值7.815
     const float thHuberStereo = sqrt(7.815);
 
     {
+        // 锁定地图点。由于需要使用地图点来构造顶点和边,因此不希望在构造的过程中部分地图点被改写造成不一致甚至是段错误
         unique_lock<mutex> lock(MapPoint::mGlobalMutex);
 
         for(int i=0; i<N; i++)
@@ -8204,37 +8224,59 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             {
                 cv::KeyPoint kpUn;
                 // Left monocular observation
+                // 这里说的Left monocular包含两种情况：1.单目情况 2.双目情况下的左目
                 if((!bRight && pFrame->mvuRight[i]<0) || i < Nleft)
                 {
+                    //如果是双目情况下的左目
                     if(i < Nleft) // pair left-right
+                        //使用未畸变校正的特征点
+                        // ?为什么
                         kpUn = pFrame->mvKeys[i];
+                    //如果是单目
                     else
+                        //使用畸变校正过的特征点
                         kpUn = pFrame->mvKeysUn[i];
 
+                    //单目地图点计数增加
                     nInitialMonoCorrespondences++;
+                    //当前地图点默认设置为不是外点
                     pFrame->mvbOutlier[i] = false;
 
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的重投影误差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
+                    //将位姿作为第一个顶点
                     e->setVertex(0,VP);
+
+                    //设置观测值，即去畸变后的像素坐标
                     e->setMeasurement(obs);
 
                     // Add here uncerteinty
+                    // 获取不确定度，这里调用uncertainty2返回固定值1.0
+                    // ?这里的1.0是作为缺省值的意思吗？是否可以根据对视觉信息的信任度动态修改这个值，比如标定的误差？
                     const float unc2 = pFrame->mpCamera->uncertainty2(obs);
 
+                    //invSigma2 = (Inverse(协方差矩阵))^2，表明该约束在各个维度上的可信度
+                    // 图像金字塔层数越高，可信度越差
                     const float invSigma2 = pFrame->mvInvLevelSigma2[kpUn.octave]/unc2;
+                    //设置该约束的信息矩阵
                     e->setInformation(Eigen::Matrix2d::Identity()*invSigma2);
 
                     g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+                    // 设置鲁棒核函数，避免其误差的平方项出现数值过大的增长 注：后续在优化2次后会用e->setRobustKernel(0)禁掉鲁棒核函数
                     e->setRobustKernel(rk);
+                    //重投影误差的自由度为2，设置对应的卡方阈值
                     rk->setDelta(thHuberMono);
 
+                    //将第一种边加入优化器
                     optimizer.addEdge(e);
 
+                    //将第一种边加入vpEdgesMono
                     vpEdgesMono.push_back(e);
+                    //将对应的特征点索引加入vnIndexEdgeMono
                     vnIndexEdgeMono.push_back(i);
                 }
                 // Stereo observation
@@ -8302,99 +8344,140 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             }
         }
     }
-
+    //统计参与优化的地图点总数目
     nInitialCorrespondences = nInitialMonoCorrespondences + nInitialStereoCorrespondences;
 
     // Set Previous Frame Vertex
+    //pFp为上一帧
     Frame* pFp = pFrame->mpPrevFrame;
 
+    //上一帧的位姿，旋转+平移，6-dim
     VertexPose* VPk = new VertexPose(pFp);
     VPk->setId(4);
     VPk->setFixed(false);
     optimizer.addVertex(VPk);
+    //上一帧的速度，3-dim
     VertexVelocity* VVk = new VertexVelocity(pFp);
     VVk->setId(5);
     VVk->setFixed(false);
     optimizer.addVertex(VVk);
+    //上一帧的陀螺仪偏置，3-dim
     VertexGyroBias* VGk = new VertexGyroBias(pFp);
     VGk->setId(6);
     VGk->setFixed(false);
     optimizer.addVertex(VGk);
+    //上一帧的加速度偏置，3-dim
     VertexAccBias* VAk = new VertexAccBias(pFp);
     VAk->setId(7);
     VAk->setFixed(false);
     optimizer.addVertex(VAk);
+    //setFixed(false)这个设置使以上四个顶点（15个参数）的值随优化而变
 
+    //第二种边（IMU预积分约束）：两帧之间位姿的变化量与IMU预积分的值偏差尽可能小
     EdgeInertial* ei = new EdgeInertial(pFrame->mpImuPreintegratedFrame);
 
+    //将上一帧四个顶点（P、V、BG、BA）和当前帧两个顶点（P、V）加入第二种边
     ei->setVertex(0, VPk);
     ei->setVertex(1, VVk);
     ei->setVertex(2, VGk);
     ei->setVertex(3, VAk);
     ei->setVertex(4, VP);
     ei->setVertex(5, VV);
+    //把第二种边加入优化器
     optimizer.addEdge(ei);
 
+    //第三种边（陀螺仪随机游走约束）：陀螺仪的随机游走值在相邻帧间不会相差太多  residual=VG-VGk
+    //用大白话来讲就是用固定的VGK拽住VG，防止VG在优化中放飞自我
     EdgeGyroRW* egr = new EdgeGyroRW();
+    //将上一帧的BG加入第三种边
     egr->setVertex(0,VGk);
+    //将当前帧的BG加入第三种边
     egr->setVertex(1,VG);
+    //C值在预积分阶段更新，range(9,12)对应陀螺仪偏置的协方差，最终cvInfoG值为inv(∑(GyroRW^2/freq))
     cv::Mat cvInfoG = pFrame->mpImuPreintegratedFrame->C.rowRange(9,12).colRange(9,12).inv(cv::DECOMP_SVD);
     Eigen::Matrix3d InfoG;
     for(int r=0;r<3;r++)
         for(int c=0;c<3;c++)
             InfoG(r,c)=cvInfoG.at<float>(r,c);
+
+    //设置信息矩阵
     egr->setInformation(InfoG);
+    //把第三种边加入优化器
     optimizer.addEdge(egr);
 
+    //第四种边（加速度随机游走约束）：加速度的随机游走值在相近帧间不会相差太多  residual=VA-VAk
+    //用大白话来讲就是用固定的VAK拽住VA，防止VA在优化中放飞自我
     EdgeAccRW* ear = new EdgeAccRW();
+    //将上一帧的BA加入第四种边
     ear->setVertex(0,VAk);
+    //将当前帧的BA加入第四种边
     ear->setVertex(1,VA);
+    //C值在预积分阶段更新，range(12,15)对应加速度偏置的协方差，最终cvInfoG值为inv(∑(AccRW^2/freq))
     cv::Mat cvInfoA = pFrame->mpImuPreintegratedFrame->C.rowRange(12,15).colRange(12,15).inv(cv::DECOMP_SVD);
     Eigen::Matrix3d InfoA;
     for(int r=0;r<3;r++)
         for(int c=0;c<3;c++)
             InfoA(r,c)=cvInfoA.at<float>(r,c);
+    //设置信息矩阵
     ear->setInformation(InfoA);
+    //把第四种边加入优化器
     optimizer.addEdge(ear);
 
     if (!pFp->mpcpi)
         Verbose::PrintMess("pFp->mpcpi does not exist!!!\nPrevious Frame " + to_string(pFp->mnId), Verbose::VERBOSITY_NORMAL);
 
+    //第五种边（先验约束）：
     EdgePriorPoseImu* ep = new EdgePriorPoseImu(pFp->mpcpi);
 
+    //将上一帧的四个顶点（P、V、BG、BA）加入第五种边
     ep->setVertex(0,VPk);
     ep->setVertex(1,VVk);
     ep->setVertex(2,VGk);
     ep->setVertex(3,VAk);
     g2o::RobustKernelHuber* rkp = new g2o::RobustKernelHuber;
     ep->setRobustKernel(rkp);
+    // ?这里的卡方阈值固定为5有什么含义吗？
     rkp->setDelta(5);
+    //把第五种边加入优化器
     optimizer.addEdge(ep);
 
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
-
+    //与PoseInertialOptimizationLastKeyFrame函数对比，区别在于：在优化过程中保持卡方阈值不变
+    // ?这是为什么呢？
     const float chi2Mono[4]={5.991,5.991,5.991,5.991};
     const float chi2Stereo[4]={15.6f,9.8f,7.815f,7.815f};
+    //4次优化的迭代次数都为10
     const int its[4]={10,10,10,10};
 
+    //坏点数
     int nBad=0;
+    //单目坏点数
     int nBadMono = 0;
+    //双目坏点数
     int nBadStereo = 0;
+    //单目内点数
     int nInliersMono = 0;
+    //双目内点数
     int nInliersStereo = 0;
+    //内点数
     int nInliers=0;
     for(size_t it=0; it<4; it++)
     {
+        // 初始化优化器,这里的参数0代表只对level为0的边进行优化（不传参数默认也是0）
         optimizer.initializeOptimization(0);
+        //每次优化迭代十次
         optimizer.optimize(its[it]);
 
+        //每次优化都重新统计各类点的数目
         nBad=0;
         nBadMono = 0;
         nBadStereo = 0;
         nInliers=0;
         nInliersMono=0;
         nInliersStereo=0;
+        //使用1.5倍的chi2Mono作为“近点”的卡方检验值，意味着地图点越近，检验越宽松
+        //地图点如何定义为“近点”在下面的代码中有解释
         float chi2close = 1.5*chi2Mono[it];
 
         for(size_t i=0, iend=vpEdgesMono.size(); i<iend; i++)
@@ -8402,28 +8485,46 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             EdgeMonoOnlyPose* e = vpEdgesMono[i];
 
             const size_t idx = vnIndexEdgeMono[i];
+
+            //当地图点在当前帧的深度值小于10时，该地图点属于close（近点）
+            //mTrackDepth是在Frame.cc的isInFrustum函数中计算出来的
             bool bClose = pFrame->mvpMapPoints[idx]->mTrackDepth<10.f;
 
+            // 如果这条误差边是来自于outlier
             if(pFrame->mvbOutlier[idx])
             {
+                //计算本次优化后的误差
                 e->computeError();
             }
 
+            // 就是error*\Omega*error，表示了这条边考虑置信度以后的误差大小
             const float chi2 = e->chi2();
 
+            //判断某地图点为外点的条件有以下三种：
+            //1.该地图点不是近点并且误差大于卡方检验值chi2Mono[it]
+            //2.该地图点是近点并且误差大于卡方检验值chi2close
+            //3.深度不为正
+            //每次优化后，用更小的卡方检验值，原因是随着优化的进行，对划分为内点的信任程度越来越低
             if((chi2>chi2Mono[it]&&!bClose)||(bClose && chi2>chi2close)||!e->isDepthPositive())
             {
+                //将该点设置为外点
                 pFrame->mvbOutlier[idx]=true;
+                //外点不参与下一轮优化
                 e->setLevel(1);
+                //单目坏点数+1
                 nBadMono++;
             }
             else
             {
+                //将该点设置为内点（暂时）
                 pFrame->mvbOutlier[idx]=false;
+                //内点继续参与下一轮优化
                 e->setLevel(0);
+                //单目内点数+1
                 nInliersMono++;
             }
 
+            //从第三次优化开始就不设置鲁棒核函数了，原因是经过两轮优化已经趋向准确值，不会有太大误差
             if (it==2)
                 e->setRobustKernel(0);
 
@@ -8459,7 +8560,9 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
                 e->setRobustKernel(0);
         }
 
+        //内点总数=单目内点数+双目内点数
         nInliers = nInliersMono + nInliersStereo;
+        //坏点数=单目坏点数+双目坏点数
         nBad = nBadMono + nBadStereo;
 
         if(optimizer.edges().size()<10)
@@ -8469,18 +8572,23 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
         }
     }
 
-
+    //若4次优化后内点数小于30，尝试恢复一部分不那么糟糕的坏点
     if ((nInliers<30) && !bRecInit)
     {
+        //重新从0开始统计坏点数
         nBad=0;
+        //单目可容忍的卡方检验最大值（如果误差比这还大就不要挣扎了...）
         const float chi2MonoOut = 18.f;
         const float chi2StereoOut = 24.f;
         EdgeMonoOnlyPose* e1;
         EdgeStereoOnlyPose* e2;
+        //遍历所有单目特征点
         for(size_t i=0, iend=vnIndexEdgeMono.size(); i<iend; i++)
         {
             const size_t idx = vnIndexEdgeMono[i];
+            //获取这些特征点对应的边
             e1 = vpEdgesMono[i];
+            // ?计算误差，其实优化过程中已经计算过了，是不是可以省略这步？
             e1->computeError();
             if (e1->chi2()<chi2MonoOut)
                 pFrame->mvbOutlier[idx]=false;
@@ -8500,13 +8608,16 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
         }
     }
 
+    // ?多此一举？优化过程中nInliers这个值已经计算过了，nInliersMono和nInliersStereo在后续代码中一直保持不变
     nInliers = nInliersMono + nInliersStereo;
 
 
     // Recover optimized pose, velocity and biases
+    //给当前帧设置优化后的旋转值，位移值，速度值，用来更新位姿
     pFrame->SetImuPoseVelocity(Converter::toCvMat(VP->estimate().Rwb),Converter::toCvMat(VP->estimate().twb),Converter::toCvMat(VV->estimate()));
     Vector6d b;
     b << VG->estimate(), VA->estimate();
+    //给当前帧设置优化后的bg，ba
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
     // Recover Hessian, marginalize previous frame states and generate new prior for frame
