@@ -8377,7 +8377,8 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     VAk->setId(7);
     VAk->setFixed(false);
     optimizer.addVertex(VAk);
-    //setFixed(false)这个设置使以上四个顶点（15个参数）的值随优化而变
+    //setFixed(false)这个设置使以上四个顶点（15个参数）的值随优化而变，这样做会给上一帧再提供一些优化空间
+    //但理论上不应该优化过多，否则会有不良影响，故后面的代码会用第五种边来约束上一帧的变化量
 
     //第二种边（IMU预积分约束）：两帧之间位姿的变化量与IMU预积分的值偏差尽可能小
     EdgeInertial* ei = new EdgeInertial(pFrame->mpImuPreintegratedFrame);
@@ -8429,10 +8430,11 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     //把第四种边加入优化器
     optimizer.addEdge(ear);
 
+    // ?既然有判空的操作，可以区分一下有先验信息（五条边）和无先验信息（四条边）的情况 
     if (!pFp->mpcpi)
         Verbose::PrintMess("pFp->mpcpi does not exist!!!\nPrevious Frame " + to_string(pFp->mnId), Verbose::VERBOSITY_NORMAL);
 
-    //第五种边（先验约束）：
+    //第五种边（先验约束）：上一帧信息随优化的改变量要尽可能小
     EdgePriorPoseImu* ep = new EdgePriorPoseImu(pFp->mpcpi);
 
     //将上一帧的四个顶点（P、V、BG、BA）加入第五种边
@@ -8442,7 +8444,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     ep->setVertex(3,VAk);
     g2o::RobustKernelHuber* rkp = new g2o::RobustKernelHuber;
     ep->setRobustKernel(rkp);
-    // ?这里的卡方阈值固定为5有什么含义吗？
+    // ?这里的卡方阈值固定为5是拍脑袋给的值吗？
     rkp->setDelta(5);
     //把第五种边加入优化器
     optimizer.addEdge(ep);
