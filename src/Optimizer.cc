@@ -7667,7 +7667,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             if(pMP)
             {
                 cv::KeyPoint kpUn;
-
                 // Left monocular observation
                 // 这里说的Left monocular包含两种情况：1.单目情况 2.双目情况下的左目
                 if((!bRight && pFrame->mvuRight[i]<0) || i < Nleft)
@@ -7690,7 +7689,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
-                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的重投影误差尽可能小
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标偏差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
                     //将位姿作为第一个顶点
@@ -8145,9 +8144,12 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear  3
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
 
-    //下一帧边缘化
+    //构造一个ConstraintPoseImu对象，为下一帧边缘化提供先验约束
+    //构造对象所使用的参数是当前帧P、V、BG、BA的估计值和H矩阵
     pFrame->mpcpi = new ConstraintPoseImu(VP->estimate().Rwb,VP->estimate().twb,VV->estimate(),VG->estimate(),VA->estimate(),H);
+    //在PoseInertialOptimizationLastFrame函数中，会将ConstraintPoseImu信息作为“上一帧先验约束”生成一条优化边
 
+    //返回值：内点数 = 总地图点数目 - 坏点（外点）数目
     return nInitialCorrespondences-nBad;
 }
 
@@ -8174,18 +8176,22 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     int nInitialCorrespondences=0;
 
     // Set Current Frame vertex
+    //当前帧的位姿，旋转+平移，6-dim
     VertexPose* VP = new VertexPose(pFrame);
     VP->setId(0);
     VP->setFixed(false);
     optimizer.addVertex(VP);
+    //当前帧的速度，3-dim
     VertexVelocity* VV = new VertexVelocity(pFrame);
     VV->setId(1);
     VV->setFixed(false);
     optimizer.addVertex(VV);
+    //当前帧的陀螺仪偏置，3-dim
     VertexGyroBias* VG = new VertexGyroBias(pFrame);
     VG->setId(2);
     VG->setFixed(false);
     optimizer.addVertex(VG);
+    //当前帧的加速度偏置，3-dim
     VertexAccBias* VA = new VertexAccBias(pFrame);
     VA->setId(3);
     VA->setFixed(false);
@@ -8245,7 +8251,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
-                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的重投影误差尽可能小
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标偏差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
                     //将位姿作为第一个顶点
