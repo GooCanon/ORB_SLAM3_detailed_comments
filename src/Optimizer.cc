@@ -8044,7 +8044,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     }
 
     // Recover optimized pose, velocity and biases
-    //给当前帧设置优化后的旋转值，位移值，速度值，用来更新位姿
+    //给当前帧设置优化后的旋转、位移、速度，用来更新位姿
     pFrame->SetImuPoseVelocity(Converter::toCvMat(VP->estimate().Rwb),Converter::toCvMat(VP->estimate().twb),Converter::toCvMat(VV->estimate()));
     Vector6d b;
     b << VG->estimate(), VA->estimate();
@@ -8621,7 +8621,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 
 
     // Recover optimized pose, velocity and biases
-    //给当前帧设置优化后的旋转值，位移值，速度值，用来更新位姿
+    //给当前帧设置优化后的旋转、位移、速度，用来更新位姿
     pFrame->SetImuPoseVelocity(Converter::toCvMat(VP->estimate().Rwb),Converter::toCvMat(VP->estimate().twb),Converter::toCvMat(VV->estimate()));
     Vector6d b;
     b << VG->estimate(), VA->estimate();
@@ -8629,23 +8629,79 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
     // Recover Hessian, marginalize previous frame states and generate new prior for frame
+    //包含本次优化所有信息矩阵的和，它代表本次优化对确定性的影响
     Eigen::Matrix<double,30,30> H;
     H.setZero();
 
+    //第1步，加上EdgeInertial（IMU预积分约束）的海森矩阵
+    //|   0~23   |  24~29                   
+    //ei……ei | 0……0     
+    //…………|…………    24
+    //ei……ei|0……0     
+    //———————————
+    //0…………………0   
+    //……………………      6
+    //0…………………0 
     H.block<24,24>(0,0)+= ei->GetHessian();
 
+    //第2步，加上EdgeGyroRW（陀螺仪随机游走约束）的信息矩阵：
+     //|   0~8   |       9~11     | 12~23 |     24~26     |27~29
+    //0……………………………………………………0   
+    //………………………………………………………
+    //0……………………………………………………0 
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0……………………………………………………0   
+    //………………………………………………………
+    //0……………………………………………………0 
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
+    //0……………………………………………………0   
+    //………………………………………………………
+    //0……………………………………………………0 
+    //9~11是上一帧的bg(3-dim)，24~26是当前帧的bg(3-dim)
     Eigen::Matrix<double,6,6> Hgr = egr->GetHessian();
     H.block<3,3>(9,9) += Hgr.block<3,3>(0,0);
     H.block<3,3>(9,24) += Hgr.block<3,3>(0,3);
     H.block<3,3>(24,9) += Hgr.block<3,3>(3,0);
     H.block<3,3>(24,24) += Hgr.block<3,3>(3,3);
 
+    //第3步，加上EdgeAccRW（加速度随机游走约束）的信息矩阵：
+    //|   0~11   |      12~14    | 15~26 |     27~29     |30
+    //0………………………………………………0   
+    //…………………………………………………
+    //0………………………………………………0 
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0………………………………………………0   
+    //…………………………………………………
+    //0………………………………………………0 
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0 ……0|Har Har Har|0……0|Har Har Har|0
+    //0………………………………………………0   
+    //…………………………………………………
+    //0………………………………………………0 
+    //12~14是上一帧的ba(3-dim)，27~29是当前帧的ba(3-dim)
     Eigen::Matrix<double,6,6> Har = ear->GetHessian();
     H.block<3,3>(12,12) += Har.block<3,3>(0,0);
     H.block<3,3>(12,27) += Har.block<3,3>(0,3);
     H.block<3,3>(27,12) += Har.block<3,3>(3,0);
     H.block<3,3>(27,27) += Har.block<3,3>(3,3);
 
+    //第4步，加上EdgePriorPoseImu（先验约束）的信息矩阵：
+    //|   0~14   |  15~29                   
+    //ep……ep|0……0     
+    //…………|…………    15
+    //ep……ep|0……0     
+    //———————————
+    //0…………………0   
+    //……………………      15
+    //0…………………0 
+    //0~14是上一帧的P(6-dim)、V(3-dim)、BG(3-dim)、BA(3-dim)
     H.block<15,15>(0,0) += ep->GetHessian();
 
     int tot_in = 0, tot_out = 0;
@@ -8657,6 +8713,20 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 
         if(!pFrame->mvbOutlier[idx])
         {
+            //  0~14  |     15~20   | 21~29
+            //0…………………………0   
+            //……………………………
+            //0…………………………0 
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0
+            //0…………………………0   
+            //……………………………
+            //0…………………………0
+            //15~20是当前帧的P(6-dim)    
             H.block<6,6>(15,15) += e->GetHessian();
             tot_in++;
         }
@@ -8672,6 +8742,19 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 
         if(!pFrame->mvbOutlier[idx])
         {
+            //  0~14  |     15~20   | 21~29
+            //0…………………………0   
+            //……………………………
+            //0…………………………0 
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0   
+            //0 ……0|e e e e e e|0……0
+            //0…………………………0   
+            //……………………………
+            //0…………………………0    
             H.block<6,6>(15,15) += e->GetHessian();
             tot_in++;
         }
