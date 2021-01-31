@@ -7587,9 +7587,22 @@ void Optimizer::MergeInertialBA(KeyFrame* pCurrKF, KeyFrame* pMergeKF, bool *pbS
     pMap->IncreaseChangeIndex();
 }
 
-
+/**
+ * @brief 使用上一关键帧+当前帧的视觉信息和IMU信息，优化当前帧位姿
+ * 
+ * 可分为以下几个步骤：
+ * 1.创建g2o优化器，初始化顶点和边
+ * 2.启动多轮优化，剔除外点
+ * 3.更新当前帧位姿、速度、IMU偏置
+ * 4.记录当前帧的优化状态，包括参数信息和对应的海森矩阵
+ * 
+ * @param[in] pFrame 当前帧，也是待优化的帧
+ * @param[in] bRecInit 调用这个函数的位置并没有传这个参数，因此它的值默认为false
+ * @return int 返回优化后的内点数
+ */
 int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit)
 {
+    // Step 1：创建g2o优化器，初始化顶点和边
     //构建一个稀疏求解器
     g2o::SparseOptimizer optimizer;
     // ?线性方程求解器，BlockSolverX表示？
@@ -7606,7 +7619,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
     //当前帧单（左）目地图点数目
     int nInitialMonoCorrespondences=0;
-    // ?当前帧立体地图点数目
     int nInitialStereoCorrespondences=0;
     //上面两项的和，即参与优化的地图点总数目
     int nInitialCorrespondences=0;
@@ -7689,7 +7701,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
-                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标偏差尽可能小
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标与特征点坐标偏差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
                     //将位姿作为第一个顶点
@@ -7869,6 +7881,8 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //把第四种边加入优化器
     optimizer.addEdge(ear);
 
+    // Step 2：启动多轮优化，剔除外点
+
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
     //卡方检验值呈递减趋势，目的是让检验越来越苛刻
@@ -8043,6 +8057,8 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
         }
     }
 
+    // Step 3：更新当前帧位姿、速度、IMU偏置
+
     // Recover optimized pose, velocity and biases
     //给当前帧设置优化后的旋转、位移、速度，用来更新位姿
     pFrame->SetImuPoseVelocity(Converter::toCvMat(VP->estimate().Rwb),Converter::toCvMat(VP->estimate().twb),Converter::toCvMat(VV->estimate()));
@@ -8051,6 +8067,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //给当前帧设置优化后的bg，ba
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
+    // Step 4：记录当前帧的优化状态，包括参数信息和对应的海森矩阵
     // Recover Hessian, marginalize keyFframe states and generate new prior for frame
     Eigen::Matrix<double,15,15> H;
     H.setZero();
@@ -8144,7 +8161,7 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear  3
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
 
-    //构造一个ConstraintPoseImu对象，为下一帧边缘化提供先验约束
+    //构造一个ConstraintPoseImu对象，为下一帧提供先验约束
     //构造对象所使用的参数是当前帧P、V、BG、BA的估计值和H矩阵
     pFrame->mpcpi = new ConstraintPoseImu(VP->estimate().Rwb,VP->estimate().twb,VV->estimate(),VG->estimate(),VA->estimate(),H);
     //在PoseInertialOptimizationLastFrame函数中，会将ConstraintPoseImu信息作为“上一帧先验约束”生成一条优化边
@@ -8153,8 +8170,22 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     return nInitialCorrespondences-nBad;
 }
 
+/**
+ * @brief 使用上一帧+当前帧的视觉信息和IMU信息，优化当前帧位姿
+ * 
+ * 可分为以下几个步骤：
+ * 1.创建g2o优化器，初始化顶点和边
+ * 2.启动多轮优化，剔除外点
+ * 3.更新当前帧位姿、速度、IMU偏置
+ * 4.记录当前帧的优化状态，包括参数信息和边缘化后的海森矩阵
+ * 
+ * @param[in] pFrame 当前帧，也是待优化的帧
+ * @param[in] bRecInit 调用这个函数的位置并没有传这个参数，因此它的值默认为false
+ * @return int 返回优化后的内点数
+ */
 int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 {
+    // Step 1：创建g2o优化器，初始化顶点和边
     //构建一个稀疏求解器
     g2o::SparseOptimizer optimizer;
     // ?线性方程求解器，BlockSolverX表示？
@@ -8251,7 +8282,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
                     Eigen::Matrix<double,2,1> obs;
                     obs << kpUn.pt.x, kpUn.pt.y;
 
-                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标偏差尽可能小
+                    //第一种边(视觉重投影约束)：地图点投影到该帧图像的坐标与特征点坐标偏差尽可能小
                     EdgeMonoOnlyPose* e = new EdgeMonoOnlyPose(pMP->GetWorldPos(),0);
 
                     //将位姿作为第一个顶点
@@ -8449,6 +8480,8 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     //把第五种边加入优化器
     optimizer.addEdge(ep);
 
+    // Step 2：启动多轮优化，剔除外点
+
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
     //与PoseInertialOptimizationLastKeyFrame函数对比，区别在于：在优化过程中保持卡方阈值不变
@@ -8619,6 +8652,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     // ?多此一举？优化过程中nInliers这个值已经计算过了，nInliersMono和nInliersStereo在后续代码中一直保持不变
     nInliers = nInliersMono + nInliersStereo;
 
+    // Step 3：更新当前帧位姿、速度、IMU偏置
 
     // Recover optimized pose, velocity and biases
     //给当前帧设置优化后的旋转、位移、速度，用来更新位姿
@@ -8628,6 +8662,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     //给当前帧设置优化后的bg，ba
     pFrame->mImuBias = IMU::Bias(b[3],b[4],b[5],b[0],b[1],b[2]);
 
+    // Step 4：记录当前帧的优化状态，包括参数信息和边缘化后的海森矩阵
     // Recover Hessian, marginalize previous frame states and generate new prior for frame
     //包含本次优化所有信息矩阵的和，它代表本次优化对确定性的影响
     Eigen::Matrix<double,30,30> H;
@@ -8762,12 +8797,32 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             tot_out++;
     }
 
+    // H  = |B  t(E)|    ------>|0                0|
+    //      |E     A|           |0  A-E*inv(B)*t(E)|
     H = Marginalize(H,0,14);
+    /*
+    等效于：
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(H.block(0, 0, 15, 15), Eigen::ComputeThinU | Eigen::ComputeThinV);
+    Eigen::JacobiSVD<Eigen::MatrixXd>::SingularValuesType singularValues_inv = svd.singularValues();
+    for (int i = 0; i < 15; ++i)
+    {
+        if (singularValues_inv(i) > 1e-6)
+            singularValues_inv(i) = 1.0 / singularValues_inv(i);
+        else
+            singularValues_inv(i) = 0;
+    }
+    Eigen::MatrixXd invHb = svd.matrixV() * singularValues_inv.asDiagonal() * svd.matrixU().transpose();
+    H.block(15, 15, 15, 15) = H.block(15, 15, 15, 15) - H.block(15, 0, 15, 15) * invHb - H.block(0, 15, 15, 15);
+    */
 
+    //构造一个ConstraintPoseImu对象，为下一帧提供先验约束
+    //构造对象所使用的参数是当前帧P、V、BG、BA的估计值和边缘化后的H矩阵
     pFrame->mpcpi = new ConstraintPoseImu(VP->estimate().Rwb,VP->estimate().twb,VV->estimate(),VG->estimate(),VA->estimate(),H.block<15,15>(15,15));
+    //下一帧使用的EdgePriorPoseImu参数来自于此
     delete pFp->mpcpi;
     pFp->mpcpi = NULL;
 
+    //返回值：内点数 = 总地图点数目 - 坏点（外点）数目
     return nInitialCorrespondences-nBad;
 }
 
