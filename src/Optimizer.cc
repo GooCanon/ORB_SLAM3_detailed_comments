@@ -7591,10 +7591,10 @@ void Optimizer::MergeInertialBA(KeyFrame* pCurrKF, KeyFrame* pMergeKF, bool *pbS
  * @brief 使用上一关键帧+当前帧的视觉信息和IMU信息，优化当前帧位姿
  * 
  * 可分为以下几个步骤：
- * 1.创建g2o优化器，初始化顶点和边
- * 2.启动多轮优化，剔除外点
- * 3.更新当前帧位姿、速度、IMU偏置
- * 4.记录当前帧的优化状态，包括参数信息和对应的海森矩阵
+ * // Step 1：创建g2o优化器，初始化顶点和边
+ * // Step 2：启动多轮优化，剔除外点
+ * // Step 3：更新当前帧位姿、速度、IMU偏置
+ * // Step 4：记录当前帧的优化状态，包括参数信息和对应的海森矩阵
  * 
  * @param[in] pFrame 当前帧，也是待优化的帧
  * @param[in] bRecInit 调用这个函数的位置并没有传这个参数，因此它的值默认为false
@@ -7605,7 +7605,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
     // Step 1：创建g2o优化器，初始化顶点和边
     //构建一个稀疏求解器
     g2o::SparseOptimizer optimizer;
-    // ?线性方程求解器，BlockSolverX表示？
     g2o::BlockSolverX::LinearSolverType * linearSolver;
 
     // 使用dense的求解器，（常见非dense求解器有cholmod线性求解器和shur补线性求解器）
@@ -7686,7 +7685,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
                     //如果是双目情况下的左目
                     if(i < Nleft) // pair left-right
                         //使用未畸变校正的特征点
-                        // ?为什么
                         kpUn = pFrame->mvKeys[i];
                     //如果是单目
                     else
@@ -8037,7 +8035,6 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
             const size_t idx = vnIndexEdgeMono[i];
             //获取这些特征点对应的边
             e1 = vpEdgesMono[i];
-            // ?计算误差，其实优化过程中已经计算过了，是不是可以省略这步？
             e1->computeError();
             //判断误差值是否超过单目可容忍的卡方检验最大值，是的话就把这个点保下来
             if (e1->chi2()<chi2MonoOut)
@@ -8094,21 +8091,20 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
     
     //经过前面几步，Hessian Matrix长这个样子（注：省略了->GetHessian2()）
-    //                   9                             + 3               + 3       =15
-    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     ||
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0     
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
-    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      9
-    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      +
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      
+    //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0      
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
     //ei ei ei ei ei ei ei ei ei   0      0     0    0     0    0
-    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     3
-    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     +
+    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     
+    // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     
     // 0  0  0  0  0  0  0   0  0  egr egr egr  0     0     0     
     // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
-    // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear  3
+    // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear  
     // 0  0  0  0  0  0  0   0  0    0     0      0  ear ear ear
 
     int tot_in = 0, tot_out = 0;
@@ -8144,21 +8140,20 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
 
     //设eie = ei->GetHessian2()+∑(e->GetHessian())
     //则最终Hessian Matrix长这样
-    //                              9                                 + 3               + 3       =15
-    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0     ||
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0     
     //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0     
     //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0
     //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0
-    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      9
-    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      +
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      
+    //eie eie eie eie eie eie ei ei ei   0      0     0    0     0    0      
     // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
     // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
     // ei    ei    ei    ei   ei   ei  ei ei ei   0      0     0    0     0    0
-    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     3
-    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     +
+    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     
+    //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     
     //  0     0     0     0     0    0   0   0  0  egr egr egr  0     0     0     
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
-    //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear  3
+    //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear  
     //  0     0     0     0     0    0   0   0  0    0     0      0  ear ear ear
 
     //构造一个ConstraintPoseImu对象，为下一帧提供先验约束
@@ -8174,10 +8169,10 @@ int Optimizer::PoseInertialOptimizationLastKeyFrame(Frame *pFrame, bool bRecInit
  * @brief 使用上一帧+当前帧的视觉信息和IMU信息，优化当前帧位姿
  * 
  * 可分为以下几个步骤：
- * 1.创建g2o优化器，初始化顶点和边
- * 2.启动多轮优化，剔除外点
- * 3.更新当前帧位姿、速度、IMU偏置
- * 4.记录当前帧的优化状态，包括参数信息和边缘化后的海森矩阵
+ * // Step 1：创建g2o优化器，初始化顶点和边
+ * // Step 2：启动多轮优化，剔除外点
+ * // Step 3：更新当前帧位姿、速度、IMU偏置
+ * // Step 4：记录当前帧的优化状态，包括参数信息和边缘化后的海森矩阵
  * 
  * @param[in] pFrame 当前帧，也是待优化的帧
  * @param[in] bRecInit 调用这个函数的位置并没有传这个参数，因此它的值默认为false
@@ -8188,7 +8183,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     // Step 1：创建g2o优化器，初始化顶点和边
     //构建一个稀疏求解器
     g2o::SparseOptimizer optimizer;
-    // ?线性方程求解器，BlockSolverX表示？
     g2o::BlockSolverX::LinearSolverType * linearSolver;
 
     // 使用dense的求解器，（常见非dense求解器有cholmod线性求解器和shur补线性求解器）
@@ -8267,7 +8261,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
                     //如果是双目情况下的左目
                     if(i < Nleft) // pair left-right
                         //使用未畸变校正的特征点
-                        // ?为什么
                         kpUn = pFrame->mvKeys[i];
                     //如果是单目
                     else
@@ -8475,7 +8468,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     ep->setVertex(3,VAk);
     g2o::RobustKernelHuber* rkp = new g2o::RobustKernelHuber;
     ep->setRobustKernel(rkp);
-    // ?这里的卡方阈值固定为5是拍脑袋给的值吗？
     rkp->setDelta(5);
     //把第五种边加入优化器
     optimizer.addEdge(ep);
@@ -8629,7 +8621,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             const size_t idx = vnIndexEdgeMono[i];
             //获取这些特征点对应的边
             e1 = vpEdgesMono[i];
-            // ?计算误差，其实优化过程中已经计算过了，是不是可以省略这步？
             e1->computeError();
             if (e1->chi2()<chi2MonoOut)
                 pFrame->mvbOutlier[idx]=false;
@@ -8669,33 +8660,10 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     H.setZero();
 
     //第1步，加上EdgeInertial（IMU预积分约束）的海森矩阵
-    //|   0~23   |  24~29                   
-    //ei……ei | 0……0     
-    //…………|…………    24
-    //ei……ei|0……0     
-    //———————————
-    //0…………………0   
-    //……………………      6
-    //0…………………0 
     H.block<24,24>(0,0)+= ei->GetHessian();
 
     //第2步，加上EdgeGyroRW（陀螺仪随机游走约束）的信息矩阵：
      //|   0~8   |       9~11     | 12~23 |     24~26     |27~29
-    //0……………………………………………………0   
-    //………………………………………………………
-    //0……………………………………………………0 
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0……………………………………………………0   
-    //………………………………………………………
-    //0……………………………………………………0 
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0 ……0|hgr hgr hgr|0……0|hgr hgr hgr|0……0
-    //0……………………………………………………0   
-    //………………………………………………………
-    //0……………………………………………………0 
     //9~11是上一帧的bg(3-dim)，24~26是当前帧的bg(3-dim)
     Eigen::Matrix<double,6,6> Hgr = egr->GetHessian();
     H.block<3,3>(9,9) += Hgr.block<3,3>(0,0);
@@ -8705,21 +8673,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 
     //第3步，加上EdgeAccRW（加速度随机游走约束）的信息矩阵：
     //|   0~11   |      12~14    | 15~26 |     27~29     |30
-    //0………………………………………………0   
-    //…………………………………………………
-    //0………………………………………………0 
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0………………………………………………0   
-    //…………………………………………………
-    //0………………………………………………0 
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0 ……0|Har Har Har|0……0|Har Har Har|0
-    //0………………………………………………0   
-    //…………………………………………………
-    //0………………………………………………0 
     //12~14是上一帧的ba(3-dim)，27~29是当前帧的ba(3-dim)
     Eigen::Matrix<double,6,6> Har = ear->GetHessian();
     H.block<3,3>(12,12) += Har.block<3,3>(0,0);
@@ -8728,14 +8681,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
     H.block<3,3>(27,27) += Har.block<3,3>(3,3);
 
     //第4步，加上EdgePriorPoseImu（先验约束）的信息矩阵：
-    //|   0~14   |  15~29                   
-    //ep……ep|0……0     
-    //…………|…………    15
-    //ep……ep|0……0     
-    //———————————
-    //0…………………0   
-    //……………………      15
-    //0…………………0 
+    //|   0~14   |  15~29        
     //0~14是上一帧的P(6-dim)、V(3-dim)、BG(3-dim)、BA(3-dim)
     H.block<15,15>(0,0) += ep->GetHessian();
 
@@ -8749,18 +8695,6 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
         if(!pFrame->mvbOutlier[idx])
         {
             //  0~14  |     15~20   | 21~29
-            //0…………………………0   
-            //……………………………
-            //0…………………………0 
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0
-            //0…………………………0   
-            //……………………………
-            //0…………………………0
             //15~20是当前帧的P(6-dim)    
             H.block<6,6>(15,15) += e->GetHessian();
             tot_in++;
@@ -8777,19 +8711,7 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
 
         if(!pFrame->mvbOutlier[idx])
         {
-            //  0~14  |     15~20   | 21~29
-            //0…………………………0   
-            //……………………………
-            //0…………………………0 
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0   
-            //0 ……0|e e e e e e|0……0
-            //0…………………………0   
-            //……………………………
-            //0…………………………0    
+            //  0~14  |     15~20   | 21~29 
             H.block<6,6>(15,15) += e->GetHessian();
             tot_in++;
         }
@@ -8797,11 +8719,11 @@ int Optimizer::PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit)
             tot_out++;
     }
 
-    // H  = |B  t(E)|    ------>|0                0|
-    //      |E     A|           |0  A-E*inv(B)*t(E)|
+    // H  = |B  E.t| ------> |0             0|
+    //      |E    A|         |0 A-E*B.inv*E.t|
     H = Marginalize(H,0,14);
     /*
-    等效于：
+    Marginalize里的函数在此处的调用等效于：
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(H.block(0, 0, 15, 15), Eigen::ComputeThinU | Eigen::ComputeThinV);
     Eigen::JacobiSVD<Eigen::MatrixXd>::SingularValuesType singularValues_inv = svd.singularValues();
     for (int i = 0; i < 15; ++i)
